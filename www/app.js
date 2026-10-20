@@ -30,8 +30,8 @@ const ic = (n, c) => `<svg class="ic ${c || ''}" viewBox="0 0 24 24" aria-hidden
 /* ---------- dati e sincronizzazione ---------- */
 const persist = () => { LS('cache', S); LS('queue', Q); };
 let kt; const kick = () => { clearTimeout(kt); kt = setTimeout(() => syncNow(), 400); };
-function putMany(sheet, rows) {
-  const chk = sheet === 'Menu' || sheet === 'Pasti';
+function putMany(sheet, rows, force) {
+  const chk = !force && (sheet === 'Menu' || sheet === 'Pasti');
   const out = rows.map(row => {
     const a = S[sheet], i = a.findIndex(r => r.id === row.id);
     const m = Object.assign({}, i < 0 ? {} : a[i], row);
@@ -44,10 +44,13 @@ const put = (sheet, row) => putMany(sheet, [row]);
 function del(sheet, ids) { S[sheet] = S[sheet].filter(r => ids.indexOf(r.id) < 0); Q.push({ action: 'delete', sheet, ids }); persist(); kick(); }
 
 async function api(body) {
-  const r = await fetch(cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ token: cfg.token }, body)) });
-  const j = await r.json();
-  if (!j.ok) throw new Error(j.error || 'errore');
-  return j;
+  const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 25000);
+  try {
+    const r = await fetch(cfg.url, { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ token: cfg.token }, body)) });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'errore');
+    return j;
+  } finally { clearTimeout(tm); }
 }
 async function syncNow(manual) {
   if (!cfg.url || busy) return;
@@ -69,11 +72,12 @@ async function syncNow(manual) {
     }
     const j = await api({ action: 'getAll' });
     if (!Q.length) { S = j.data; persist(); }
+    sync.err = ''; sync.at = new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
     setSync('ok');
     if (conflicts) toast('Alcune modifiche erano già cambiate sull’altro telefono');
     else if (manual) toast('Modifiche sincronizzate');
     if (JSON.stringify(S) !== before && !(document.activeElement && document.activeElement.matches('#app input'))) render();
-  } catch (e) { setSync(e.message === 'unauthorized' ? 'auth' : 'off'); }
+  } catch (e) { sync.err = e.name === 'AbortError' ? 'tempo scaduto' : e.message; setSync(e.message === 'unauthorized' ? 'auth' : 'off'); }
   finally { busy = false; }
 }
 const syncText = () => ({ work: 'Sincronizzo…', ok: 'Sincronizzato', auth: 'Codice non valido', off: Q.length ? 'Offline · modifiche salvate' : 'Offline', idle: Q.length ? 'In attesa' : 'Pronto' }[sync.state]);
@@ -131,7 +135,7 @@ function generate(keep) {
     if (r.repeat) limited = true;
     picked[d + s] = r.p; rows.push(rowOf(d, s, r.p));
   });
-  if (rows.length) putMany('Menu', rows);
+  if (rows.length) putMany('Menu', rows, true);
   return { limited };
 }
 function changeMeal(d, s) {
@@ -139,8 +143,14 @@ function changeMeal(d, s) {
   if (m && m.bloccato === '1') return toast('Pasto bloccato: sbloccalo per cambiarlo');
   const r = choose(d, s, pickedMap(d + s, false, mondayOf(d)), m && m.pastoId);
   if (!r) return toast('Nessun pasto disponibile: aggiungine altri');
-  put('Menu', rowOf(d, s, r.p)); rebuildSpesa(mondayOf(d)); render();
+  putMany('Menu', [rowOf(d, s, r.p)], true); rebuildSpesa(mondayOf(d)); render();
   toast(r.repeat ? 'Pasto sostituito · varietà limitata' : 'Pasto sostituito');
+}
+function setMeal(d, s, id) {
+  const p = S.Pasti.find(x => x.id === id); if (!p) return;
+  putMany('Menu', [rowOf(d, s, p)], true); rebuildSpesa(mondayOf(d));
+  if ($('#dlg').open) $('#dlg').close();
+  render(); toast('Pasto sostituito');
 }
 const slug = n => 'm-' + n.replace(/[^a-z0-9]+/g, '-');
 function rebuildSpesa(ws) {
@@ -161,13 +171,19 @@ const head = (eb, t) => `<header class="top"><div><p class="eyebrow">${esc(eb)}<
 const empty = (t, x, b) => `<div class="empty"><h2>${t}</h2><p class="muted">${x}</p>${b || ''}</div>`;
 const rowAt = (d, s) => S.Menu.find(m => m.data === d && m.slot === s);
 const pastoOf = m => m && S.Pasti.find(x => x.id === m.pastoId);
+function pickSel(d, s) {
+  const ok = pool(s).map(p => p.id);
+  const opts = S.Pasti.filter(p => p.attivo !== '0' && (!p.categoria || p.categoria === 'entrambi' || p.categoria === s)).sort((a, b) => a.nome.localeCompare(b.nome, 'it'));
+  if (!opts.length) return '';
+  return `<select class="pick" data-pick="${d}|${s}" aria-label="Scegli il piatto per ${s}"><option value="">Scegli dalla lista</option>${opts.map(p => `<option value="${esc(p.id)}">${esc(p.nome)}${ok.indexOf(p.id) < 0 ? ' (escluso)' : ''}</option>`).join('')}</select>`;
+}
 
 function card(d, s) {
   const m = rowAt(d, s), p = pastoOf(m);
   if (!m) return `<article class="card"><p class="label">${cap(s)}</p><p class="muted">Non ancora scelto</p></article>`;
   const tags = (m.bloccato === '1' ? ' · bloccato' : '') + (m.preparato === '1' ? ' · preparato' : '');
   return `<article class="card ${m.preparato === '1' ? 'done' : ''}"><p class="label">${cap(s)}${tags}</p><h2>${esc(m.nome)}</h2><p class="muted clamp">${esc(p ? p.ingredienti : '')}</p>
-  <div class="row"><button class="link" data-act="change" data-d="${d}" data-s="${s}">Cambia pasto</button><button class="link" data-act="open" data-d="${d}" data-s="${s}">Dettagli</button></div></article>`;
+  <div class="row"><button class="link" data-act="change" data-d="${d}" data-s="${s}">Cambia pasto</button>${pickSel(d, s)}<button class="link" data-act="open" data-d="${d}" data-s="${s}">Dettagli</button></div></article>`;
 }
 function vMenu() {
   const t = today(), tm = addDays(t, 1), has = rowAt(t, 'pranzo') || rowAt(t, 'cena');
@@ -229,7 +245,7 @@ function openMeal(d, s) {
   const m = rowAt(d, s); if (!m) return;
   const p = pastoOf(m);
   sheet(`<p class="label">${cap(fmt(d, { weekday: 'long', day: 'numeric' }))} · ${cap(s)}</p><h2>${esc(m.nome)}</h2><p class="muted">${esc(p ? p.ingredienti : '')}</p>${p && p.note ? `<p>${esc(p.note)}</p>` : ''}
-  <div class="stack"><button class="btn" data-act="change" data-d="${d}" data-s="${s}">Cambia pasto</button>
+  <div class="stack"><button class="btn" data-act="change" data-d="${d}" data-s="${s}">Cambia pasto</button>${pickSel(d, s)}
   <button class="btn ghost" data-act="tg" data-f="bloccato" data-d="${d}" data-s="${s}">${m.bloccato === '1' ? 'Sblocca pasto' : 'Blocca pasto'}</button>
   <button class="btn ghost" data-act="tg" data-f="preparato" data-d="${d}" data-s="${s}">${m.preparato === '1' ? 'Non preparato' : 'Segna come preparato'}</button>
   <button class="link" data-act="close">Chiudi</button></div>`);
@@ -255,6 +271,7 @@ function openSettings() {
   sheet(`<h2>Preferenze</h2><div class="stack">${ta('esclusi', 'Alimenti esclusi (separati da virgola)')}${ta('allergie', 'Allergie e intolleranze')}${ta('graditi', 'Alimenti graditi')}${ta('nonGraditi', 'Alimenti non graditi')}
   <label class="chk"><input type="checkbox" id="s-legumi" ${getSet('legumi') === '1' ? 'checked' : ''}> Usa i legumi</label>
   <p class="muted">Controlla sempre le etichette: l’app non verifica gli ingredienti dei prodotti.</p>
+  <p class="muted">Sincronizzazione: ${sync.at ? 'ultima alle ' + sync.at : 'non ancora riuscita'} · in coda: ${Q.length}${sync.err ? ' · errore: ' + esc(sync.err) : ''}</p>${Q.length ? '<button class="btn danger" data-act="resync">Scarta modifiche in coda e riscarica</button>' : ''}
   <details><summary>Collegamento al foglio</summary><div class="stack"><label>Indirizzo del backend<input class="in" id="f-url" value="${esc(cfg.url)}"></label><label>Codice di accesso<input class="in" id="f-token" value="${esc(cfg.token)}"></label></div></details>
   <button class="btn" data-act="saves">Salva</button><button class="link" data-act="close">Chiudi</button></div>`);
 }
@@ -310,13 +327,17 @@ const A = {
   },
   filter(el) { filter = el.dataset.v; render(); },
   rmitem(el) { del('Spesa', [el.dataset.id]); render(); },
-  refill() { rebuildSpesa(weekStart); render(); toast('Lista aggiornata'); }
+  refill() { rebuildSpesa(weekStart); render(); toast('Lista aggiornata'); },
+  async resync() {
+    if (!(await ask('Le modifiche non ancora inviate andranno perse. Continuare?', 'Riscarica'))) return;
+    Q = []; persist(); $('#dlg').close(); syncNow(true);
+  }
 };
 document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]'); if (el && A[el.dataset.act]) A[el.dataset.act](el);
   const g = e.target.closest('[data-go]'); if (g) { view = g.dataset.go; render(); window.scrollTo(0, 0); }
 });
-document.addEventListener('change', e => { const t = e.target; if (t.dataset && t.dataset.tick) { put('Spesa', { id: t.dataset.tick, spuntato: t.checked ? '1' : '0' }); render(); } });
+document.addEventListener('change', e => { const t = e.target; if (t.dataset && t.dataset.pick && t.value) { const k = t.dataset.pick.split('|'); setMeal(k[0], k[1], t.value); return; } if (t.dataset && t.dataset.tick) { put('Spesa', { id: t.dataset.tick, spuntato: t.checked ? '1' : '0' }); render(); } });
 document.addEventListener('submit', e => {
   if (e.target.id !== 'addf') return; e.preventDefault();
   const v = val('newitem'); if (!v) return;
