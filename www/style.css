@@ -69,3 +69,5 @@ dialog::backdrop{background:rgba(20,26,22,.4)}
 #toast.on{opacity:1;transform:translate(-50%,0)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 @media (min-width:700px){dialog{margin:auto;border-radius:20px}}
+.pick{min-height:44px;max-width:100%;padding:0 12px;border:0;border-radius:10px;background:none;color:var(--pr);font-weight:600}
+dialog .pick{background:var(--prs);border-radius:14px;min-height:48px;width:100%}
