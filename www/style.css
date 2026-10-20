@@ -23,7 +23,9 @@ p{margin:4px 0}
 .card{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--ln);border-radius:var(--r);padding:var(--s);margin-bottom:12px}
 .card.soft{background:var(--prs);border-color:transparent}
 .card.done h2{text-decoration:line-through;color:var(--mu)}
-.row{display:flex;gap:4px;margin:6px -12px -8px}
+.row{display:flex;flex-wrap:wrap;gap:4px;margin:6px -12px -8px}
+.row .pick{order:3;flex:1 1 100%;min-width:0;margin:4px 12px 8px;padding:0 12px;background:var(--prs);border-radius:12px;min-height:48px;text-overflow:ellipsis}
+.card{min-width:0}
 .link{background:none;border:0;color:var(--pr);font-weight:600;min-height:44px;padding:0 12px;border-radius:10px}
 .center{display:block;margin:12px auto}
 .btn{background:var(--pr);color:#fff;border:0;border-radius:14px;min-height:48px;padding:0 20px;font-weight:600}
